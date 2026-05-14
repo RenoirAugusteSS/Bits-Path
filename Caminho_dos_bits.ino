@@ -13,7 +13,7 @@
 // ── Pinos ─────────────────────────────────────────────────────────────────────
 
 #define BTN_CYCLE  18
-#define BTN_TOGGLE 19
+#define BTN_TOGGLE 21
 
 // ── Dimensões máximas ─────────────────────────────────────────────────────────
 
@@ -586,6 +586,8 @@ void handle_buttons(unsigned long now) {
 
     prev_cycle  = curr_cycle;
     prev_toggle = curr_toggle;
+
+    desenharFase1();
 }
 
 // ── Setup e Loop ──────────────────────────────────────────────────────────────
