@@ -1,3 +1,11 @@
+#include "game_types.h"
+
+// ── Variáveis externas declaradas em Display.ino ──────────────────────────────
+extern GameMode game_mode;
+extern int      current_screen;
+extern void     reading_next();
+extern void     reading_show_current();
+
 // logic_gate_game_v6.ino
 // 10 fases de portas lógicas — ESP32
 // Base: v3 (dois botões + serial em paralelo, vitória sem travar)
@@ -563,18 +571,29 @@ void handle_buttons(unsigned long now) {
     bool curr_cycle  = digitalRead(BTN_CYCLE);
     bool curr_toggle = digitalRead(BTN_TOGGLE);
 
-    // BTN_CYCLE: cicla entradas normalmente; avança fase se já venceu
+    // ── Modo leitura: BTN_CYCLE avança telas ─────────────────────────────────
+    if (game_mode == MODE_READING) {
+        if (prev_cycle == HIGH && curr_cycle == LOW) {
+            if (now - last_cycle_press > DEBOUNCE_MS) {
+                last_cycle_press = now;
+                reading_next();   // avança tela ou entra no jogo
+            }
+        }
+        // BTN_TOGGLE ignorado no modo leitura
+        prev_cycle  = curr_cycle;
+        prev_toggle = curr_toggle;
+        return;
+    }
+
+    // ── Modo jogo: comportamento original ────────────────────────────────────
     if (prev_cycle == HIGH && curr_cycle == LOW) {
         if (now - last_cycle_press > DEBOUNCE_MS) {
             last_cycle_press = now;
-            // BTN_CYCLE sempre cicla entradas — mesmo após vencer
-            // Para avançar de fase use 'n' no serial
             cycle_selected_input();
             print_state();
         }
     }
 
-    // BTN_TOGGLE: alterna valor da entrada selecionada
     if (prev_toggle == HIGH && curr_toggle == LOW) {
         if (now - last_toggle_press > DEBOUNCE_MS) {
             last_toggle_press = now;
@@ -607,6 +626,11 @@ void setup() {
     print_state();
 
     inicializar_display();
+
+    iniciarCoresFase();      // inicializa COR_ATIVO/INATIVO/FUNDO
+
+    // Exibe a primeira tela de leitura
+    reading_show_current();
 }
 
 void loop() {
