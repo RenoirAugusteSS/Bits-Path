@@ -89,10 +89,51 @@ MatrixPanel_I2S_DMA *display = nullptr;
 #define CHAR_H       8   // altura de cada caractere em pixels  (fonte 1:1)
 #define LINE_SPACING 1   // pixels extras entre linhas
 
+uint16_t branco = display->color565(255, 255, 255);
+
 // ── 0. LAYOUTS E MÉTODOS PADRÕES ───────────────────────────────────────────────────────────────────
 
+static inline void _px(int16_t x, int16_t y, uint16_t cor) {
+    display->drawPixel(x, y, cor);
+}
+
+void desenharAND(int16_t x, int16_t y, uint16_t cor) {
+    // Topo e base (linha horizontal esquerda)
+    for (int c = 0; c < 4; c++) _px(x+c, y+0, cor);  // row 0
+    for (int c = 0; c < 4; c++) _px(x+c, y+4, cor);  // row 4
+
+    // Borda esquerda (coluna 0)
+    for (int r = 1; r < 4; r++) _px(x+0, y+r, cor);
+
+    // Curva direita (D)
+    for (int l = 1; l < 4; l++) _px(x+4, y+l, cor);
+}
+
+void desenharOR(int16_t x, int16_t y, uint16_t cor) {
+    // Topo e base
+    for (int c = 0; c < 4; c++) _px(x+c, y+0, cor);  // row 0
+    for (int c = 0; c < 4; c++) _px(x+c, y+4, cor);  // row 4
+
+    // Laterais arredondada (esquerda)
+    for (int e = 1; e < 4; e++) _px(x+1, y+e, cor);
+
+    // Laterais arredondada (esquerda)
+    _px(x+4, y+1, cor);
+    _px(x+5, y+2, cor);
+    _px(x+4, y+3, cor);
+}
+
+void desenharNOT(int16_t x, int16_t y, uint16_t cor) {
+    // Triângulo apontando para a direita
+    _px(x+0, y+0, cor);
+    _px(x+0, y+1, cor); _px(x+1, y+1, cor);
+    _px(x+0, y+2, cor); _px(x+1, y+2, cor); _px(x+2, y+2, cor);
+    _px(x+0, y+3, cor); _px(x+1, y+3, cor); 
+    _px(x+0, y+4, cor); 
+
+}
+
 void borda_branca() {
-    uint16_t branco = display->color565(255, 255, 255);
     display->drawRect(0, 0, display->width(), display->height(), branco);
 }
 
@@ -170,5 +211,7 @@ void inicializar_display() {
     Serial.println();
 
     borda_branca();
-    bem_vindo();
+    desenharAND(5, 5, branco);
+    desenharOR(15, 5, branco);
+    desenharNOT(25, 5, branco);
 }
