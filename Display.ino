@@ -93,14 +93,43 @@ MatrixPanel_I2S_DMA *display = nullptr;
 
 #define NUM_INPUTS 6
 
+// Forward declarations das funções de desenho
+void desenharFase1();
+void desenharFase2();
+void desenharFase3();
+void desenharFase4();
+void desenharFase5();
+void desenharFase6();
+void desenharFase7();
+void desenharFase8();
+void desenharFase9();
+void desenharFase10();
+// ... adiciona as demais conforme criar
+
+typedef void (*FaseFn)();
+FaseFn fase_screens[] = {
+    desenharFase1,
+    desenharFase2,
+    desenharFase3,
+    desenharFase4,
+    desenharFase5,
+    desenharFase6,
+    desenharFase7,
+    desenharFase8,
+    desenharFase9,
+    desenharFase10
+    // ...
+};
+
 // ── MÁQUINA DE ESTADOS ────────────────────────────────────────────────────────
 
 // Array de funções de tela — adicione novas telas aqui no futuro
 typedef void (*ScreenFn)();
 ScreenFn reading_screens[] = {
     bem_vindo,
-    // instrucoes,   // ← descomente quando criar
-    // creditos,     // ← descomente quando criar
+    instrucoes_eixo_x,
+    instrucoes_eixo_y,
+    wrapper_instrucoes_sw
 };
 const int NUM_SCREENS = sizeof(reading_screens) / sizeof(reading_screens[0]);
 
@@ -115,11 +144,12 @@ short int matriz[32][64];
 static uint16_t COR_ATIVO   = 0;  // inicializado em setup()
 static uint16_t COR_INATIVO = 0;
 static uint16_t COR_FUNDO   = 0;
+static uint16_t COR_PORTA   = 0;
 
 void inicializarMatriz() {
   for(int y = 0; y < 32; y++) {
     for(int x = 0; x < 64; x++) {
-      matriz[y][x] = 2;
+      matriz[y][x] = 3;
     }
   }
 }
@@ -128,6 +158,7 @@ void iniciarCoresFase() {
     COR_ATIVO   = display->color565(0,   220, 0);    // verde
     COR_INATIVO = display->color565(180, 0,   0);    // vermelho
     COR_FUNDO   = display->color565(0,   0,   0);    // preto
+    COR_PORTA   = display->color565(255,   255,   255);    // preto
 }
 
 // ── Helpers internos ──────────────────────────────────────────────────────────
@@ -161,14 +192,16 @@ void mpAND(int col, int row, short int val) {
 }
 
 void mpOR(int col, int row, short int val) {
-    MH(col, col+3, row,   val);  // topo
-    MH(col, col+3, row+4, val);  // base
-    MV(col+1, row+1, row+3, val);  // lateral esquerda
+    MH(col, col+4, row,   val);  // topo
+    MH(col, col+4, row+6, val);  // base
+    MV(col+1, row+1, row+6, val);  // lateral esquerda
 
     //curva direita
-    MP(col+4, row+1, val);
-    MP(col+5, row+2, val);
-    MP(col+4, row+3, val);
+    MP(col+5, row+1, val);
+    MP(col+6, row+2, val);
+    MP(col+7, row+3, val);
+    MP(col+6, row+4, val);
+    MP(col+5, row+5, val);
 }
 
 void mpNOT(int col, int row, short int val) {
@@ -178,12 +211,6 @@ void mpNOT(int col, int row, short int val) {
     MH(col,   col+2, row+2, val);  // vértice
     MH(col,   col+1, row+3, val);  
     MP(col,   row+4, val);
-}
-
-void entradas_leds() {
-    for (int i = 3; i < 32; i += 5) {
-        MH(0, 5, i, COR_INATIVO);
-    }
 }
 
 // ── Renderizador: usa COR_ATIVO/INATIVO por célula ───────────────────────────
@@ -196,6 +223,8 @@ void renderizarComCores() {
                 cor = COR_INATIVO;
             } else if (matriz[row][col] == 1) {
                 cor = COR_ATIVO;
+            } else if (matriz[row][col] == 2) {
+                cor = COR_PORTA;
             } else {
                 cor = COR_FUNDO;
             }
@@ -233,6 +262,7 @@ void renderizarComCores() {
 
 // Avança tela de leitura; na última, entra no modo jogo
 void reading_next() {
+
     current_screen++;
     if (current_screen >= NUM_SCREENS) {
         // Todas as telas exibidas — entra no modo jogo
@@ -240,8 +270,18 @@ void reading_next() {
         current_screen = 0;           // reseta para próxima vez
         display->clearScreen();
         // Desenha a fase 1 — a lógica do jogo já foi carregada no setup()
-        desenharFase1();
+        desenharFaseAtual();
     } else {
+        display->clearScreen();
+        reading_screens[current_screen]();
+    }
+}
+
+// Display.ino: Adicione logo abaixo de reading_next()
+void reading_prev() {
+
+    if (current_screen > 0) {
+        current_screen--;
         display->clearScreen();
         reading_screens[current_screen]();
     }
@@ -258,35 +298,34 @@ void borda_branca() {
     display->drawRect(0, 0, display->width(), display->height(), branco);
 }
 
-// ── 1. BEM-VINDO ────────────────────────────────────────────────────────────────────
-void bem_vindo() {
+void desenharFaseAtual() {
+    display->clearScreen();
+    if (current_phase >= 1 && current_phase <= NUM_PHASES) {
+        fase_screens[current_phase - 1]();  // índice base-0
+    }
+}
+
+void desenharNumeroFase(int fase) {
     uint16_t branco = display->color565(255, 255, 255);
-
-    // Cada linha: { texto, x centralizado }
-    const char* linhas[] = { "CAMINHO", "DOS", "BITS" };
-    const int num_linhas = 3;
-
-    const int CHAR_H_LOCAL   = 8;  // altura do glyph com fonte 1
-    const int LINE_SPACING   = 2;  // px entre linhas
-    const int block_h        = num_linhas * CHAR_H_LOCAL
-                               + (num_linhas - 1) * LINE_SPACING; // = 28
-
-    int y_start = (PANEL_HEIGHT - block_h) / 2;  // = 2
-
+    
+    display->setFont(&TomThumb);
     display->setTextSize(1);
     display->setTextWrap(false);
     display->setTextColor(branco);
 
-    for (int i = 0; i < num_linhas; i++) {
-        int len   = strlen(linhas[i]);
-        int x     = (PANEL_WIDTH - len * 6) / 2;
-        int y     = y_start + i * (CHAR_H_LOCAL + LINE_SPACING);
-        display->setCursor(x, y);
-        display->print(linhas[i]);
-    }
+    // TomThumb: cada dígito ocupa 4px de largura, baseline = topo + 5px
+    // Fase pode ser 1-10: números de 1 ou 2 dígitos
+    int digits = (fase >= 10) ? 2 : 1;
+    int x = PANEL_WIDTH - (digits * 4);  // cola na borda direita
+    int y = 5;                            // baseline do TomThumb: char começa em y=0
+
+    display->setCursor(x, y);
+    display->print(fase);
+
+    display->setFont(NULL);
 }
 
-// // ── Setup ─────────────────────────────────────────────────────────────────────
+// ── Setup do painel ─────────────────────────────────────────────────────────────────────
 
 void inicializar_display() {
     // FM6124DJ exige sequência especial de inicialização.

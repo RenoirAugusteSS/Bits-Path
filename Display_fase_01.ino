@@ -1,6 +1,5 @@
 void desenharFase1() {
     inicializarMatriz();
-    entradas_leds();
 
     // Recupera valores lógicos da engine do jogo
     short int vA    = values[0];  // entrada A
@@ -16,6 +15,9 @@ void desenharFase1() {
     //    yEntrada(i) com num_inputs=2: A=row3, E=row23
     int rowA = 3;
     int rowE = 23; 
+
+    bool show_A = !(selected_input == 0 && !blink_state);
+    bool show_E = !(selected_input == 1 && !blink_state);
 
     int rowNOTA = 1;   // row 7
     int colNOTA = 9;
@@ -35,18 +37,23 @@ void desenharFase1() {
     int rowSaidaAND1 = rowAND1 + 2;  // row14
     int rowSaidaAND2 = rowAND2 + 2;  // row20
 
-    int rowSaidaOR = rowOR + 2;   // centro do OR — entre row14 e row20
+    int rowSaidaOR = rowOR + 3;   // centro do OR — entre row14 e row20
 
-    // ─── A e E lines ───────────────────────
-    MH(0, colNOTE-1, rowA, vA);
-    MH(0, colNOTE-1, rowE, vE);
+    // ─── A e E lines ─────────────────────────────────────────────────────
+    if (show_A) {
+        MH(0, colNOTE-1, rowA, vA);
+    }
+
+    if (show_E) {
+        MH(0, colNOTE-1, rowE, vE);
+    }
 
     // ── 2. NOT_A (col9, row7) e NOT_E (col9, row18) ───────────────────────
     //    NOT 7 linhas de altura: centralizado em row10 → topo=row7
     //    NOT 7 linhas de altura: centralizado em row21 → topo=row18
 
-    mpNOT(colNOTA, rowNOTA, vNA);  // NOT_A
-    mpNOT(colNOTE, rowNOTE, vNE);  // NOT_E
+    mpNOT(colNOTA, rowNOTA, /*vNA*/2);  // NOT_A
+    mpNOT(colNOTE, rowNOTE, /*vNE*/2);  // NOT_E
 
     // ── 3. Roteamento NOT→AND ─────────────────────────────────────────────
     //    Saída do NOT está em col+5,row+3 = col14, row10 (NA) e col14, row21 (NE)
@@ -79,8 +86,8 @@ void desenharFase1() {
     MH(5, colAND2-1, rowAND2+1, vE);
 
     // ── 4. AND1 e AND2 ───────────────────────────────────────────────────────
-    mpAND(colAND1, rowAND1, vAND1);   // AND(A, NE)  col18, rows12..16
-    mpAND(colAND2, rowAND2, vAND2);   // AND(NA, E)  col18, rows18..22
+    mpAND(colAND1, rowAND1, /*vAND1*/2);   // AND(A, NE)  col18, rows12..16
+    mpAND(colAND2, rowAND2, /*vAND2*/2);   // AND(NA, E)  col18, rows18..22
 
     MH(colAND1+5, colAND1+8, rowSaidaAND1, vAND1);   // AND1→junção horizontal
     MV(colAND1+8, rowSaidaAND1+1, rowSaidaOR-1, vAND1); // vertical subindo
@@ -88,19 +95,20 @@ void desenharFase1() {
 
     MH(colAND2+5, colAND2+8, rowSaidaAND2, vAND2);   // AND2→junção horizontal
     MV(colAND2+8, rowSaidaAND2-1, rowSaidaOR+1, vAND2); // vertical descendo
-    MH(colAND2+9, colOR, rowSaidaOR+1, vAND2);   // AND1→junção horizontal
+    MH(colAND2+9, colOR, rowSaidaOR+1, vAND2);   // AND2→junção horizontal
 
     // ── 6. OR (col27, centrado em rowOR=15, topo=row12) ──────────────────
     
-    mpOR(colOR, rowOR, vOR);
+    mpOR(colOR, rowOR, /*vOR*/2);
 
     // ── 7. Saída OR→S ─────────────────────────────────────────────────────
     // saída do OR: col32, rowOR=15
-    MH(colOR+6 , colOR+10, rowSaidaOR, vOR);
+    MH(colOR+8 , colOR+10, rowSaidaOR, vOR);
 
     // LED indicador 3×3 em col39..41, rows 14..16
     for (int r = rowSaidaOR-1; r <= rowSaidaOR+1; r++)
         MH(colOR+11, colOR+13, r, vOR);
 
     renderizarComCores();
+    desenharNumeroFase(1);
 }

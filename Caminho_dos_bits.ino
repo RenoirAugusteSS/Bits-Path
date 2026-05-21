@@ -1,10 +1,20 @@
+#include <Adafruit_GFX.h>
+#include <Adafruit_GrayOLED.h>
+#include <Adafruit_SPITFT.h>
+#include <Adafruit_SPITFT_Macros.h>
+#include <gfxfont.h>
 #include "game_types.h"
+#include <Fonts/TomThumb.h>
 
 // ── Variáveis externas declaradas em Display.ino ──────────────────────────────
 extern GameMode game_mode;
 extern int      current_screen;
 extern void     reading_next();
+extern void     reading_prev(); 
 extern void     reading_show_current();
+extern void     desenharFaseAtual();
+extern void     alterar_cor_joystick();
+
 
 // logic_gate_game_v6.ino
 // 10 fases de portas lógicas — ESP32
@@ -20,8 +30,15 @@ extern void     reading_show_current();
 
 // ── Pinos ─────────────────────────────────────────────────────────────────────
 
-#define BTN_CYCLE  18
-#define BTN_TOGGLE 21
+#define JOY_VRX 33  // ADC apropriado para leitura analógica
+#define JOY_VRY 32  // ADC apropriado para leitura analógica
+#define JOY_SW  21  // Input digital (mantém-se com INPUT_PULLUP)
+#define JOY_COOLDOWN_MS 300 // Tempo de supressão de transientes (300ms engole o snap-back)
+#define JOY_SETTLE_TIME 300 // ms contínuos no centro para considerar a mola parada
+#define JOY_CENTER_ZONE 150
+
+#define JOY_DEADZONE 700
+
 
 // ── Dimensões máximas ─────────────────────────────────────────────────────────
 
@@ -29,6 +46,17 @@ extern void     reading_show_current();
 #define MAX_N      20
 #define MAX_INPUTS  6
 #define NUM_PHASES 10
+
+// Animação da borda
+#define PERIMETER       188      // número de pixels na borda externa (2*(64+32)-4)
+#define SNAKE_LENGTH    16          // comprimento da cobrinha (8 pixels)
+#define BORDER_SPEED_MS 60       // intervalo entre cada movimento da cobrinha (ms)
+
+#define RGB_R 22
+#define RGB_G 2
+
+void rgb_verde()    { digitalWrite(RGB_R, LOW);  digitalWrite(RGB_G, HIGH); }
+void rgb_vermelho() { digitalWrite(RGB_R, HIGH); digitalWrite(RGB_G, LOW);  }
 
 // ── Tipos de porta ────────────────────────────────────────────────────────────
 
@@ -52,6 +80,34 @@ char     input_labels[MAX_INPUTS]; // letra de cada entrada ('A'..'F')
 int      num_nos;      // total de nós da fase atual
 int      num_inputs;   // total de entradas da fase atual
 int      output_id;    // índice do nó de saída S
+
+int joy_center_x = 2048, joy_center_y = 2048;
+unsigned long last_sw_press = 0;
+unsigned long x_center_time = 0;
+unsigned long y_center_time = 0;
+bool prev_sw = HIGH;
+bool axis_x_active = false;
+bool axis_y_active = false;
+unsigned long last_joy_action = 0;
+unsigned long last_debug_print = 0;
+static unsigned long last_reading_action = 0;
+
+bool display_dirty = true;  // true = precisa redesenhar
+
+// ── Temporização do Efeito Pisca (Blink) ──────────────────────────────────
+unsigned long last_blink_time = 0;
+const unsigned long BLINK_INTERVAL = 300; // Tempo em milissegundos (f = 1Hz)
+bool blink_state = true;                  // true = renderiza entrada, false = oculta
+
+// No topo do arquivo, junto com as outras globais
+uint16_t rainbow_text_color = 0;      // cor atual para os textos
+unsigned long last_rainbow_update = 0;
+const unsigned long RAINBOW_INTERVAL = 80; // ms entre cada mudança de cor
+
+int       snake_head = 0;             // posição atual da cabeça (0..187)
+int       snake_body[SNAKE_LENGTH];   // armazena as posições de cada segmento
+unsigned long last_snake_move = 0;
+bool      snake_initialized = false;
 
 // ── Estado do jogo ────────────────────────────────────────────────────────────
 
@@ -85,6 +141,29 @@ bool prev_toggle = HIGH;
 // ── Forward declaration ───────────────────────────────────────────────────────
 
 void print_state();
+
+#define FILTER_SIZE 5
+int x_buffer[FILTER_SIZE];
+int x_idx = 0;
+
+int readFilteredX() {
+    x_buffer[x_idx] = analogRead(JOY_VRX);
+    x_idx = (x_idx + 1) % FILTER_SIZE;
+    long sum = 0;
+    for (int i = 0; i < FILTER_SIZE; i++) sum += x_buffer[i];
+    return sum / FILTER_SIZE;
+}
+
+int y_buffer[FILTER_SIZE];
+int y_idx = 0;
+
+int readFilteredY() {
+    y_buffer[y_idx] = analogRead(JOY_VRY);
+    y_idx = (y_idx + 1) % FILTER_SIZE;
+    long sum = 0;
+    for (int i = 0; i < FILTER_SIZE; i++) sum += y_buffer[i];
+    return sum / FILTER_SIZE;
+}
 
 // ── Helpers de construção do circuito ────────────────────────────────────────
 
@@ -385,6 +464,7 @@ void load_phase(int phase) {
         case 9:  init_fase_9();  break;
         case 10: init_fase_10(); break;
     }
+    atualizar_rgb();
 }
 
 // ── Lógica do circuito ────────────────────────────────────────────────────────
@@ -430,6 +510,8 @@ void toggle_input(int input_index) {
     int node_id = input_ids[input_index];
     values[node_id] = !values[node_id];
     propagate();
+    atualizar_rgb();
+    display_dirty = true;
 }
 
 // Verifica vitória — apenas marca phase_won para habilitar avanço de fase.
@@ -442,6 +524,8 @@ void check_victory() {
 }
 
 void advance_phase() {
+    Serial.println(">>> advance_phase() chamada");
+
     if (current_phase < NUM_PHASES) {
         current_phase++;
         load_phase(current_phase);
@@ -455,10 +539,33 @@ void advance_phase() {
     } else {
         Serial.println("Ja esta na ultima fase!");
     }
+
+    display_dirty = true;
 }
 
-void cycle_selected_input() {
-    selected_input = (selected_input + 1) % num_inputs;
+void previous_phase() {
+    Serial.println(">>> previous_phase() chamada");
+
+    if (current_phase > 1) {
+        current_phase--;
+        load_phase(current_phase);
+        propagate();
+        Serial.println();
+        Serial.print("=== FASE ");
+        Serial.print(current_phase);
+        Serial.print(" === ");
+        Serial.println(phase_formulas[current_phase - 1]);
+        print_state();
+    } else {
+        Serial.println("Ja esta na primeira fase!");
+    }
+
+    display_dirty = true;
+}
+
+void cycle_selected_input(int direction) {
+    selected_input = (selected_input + direction + num_inputs) % num_inputs;
+    display_dirty = true;
 }
 
 // ── Exibição ──────────────────────────────────────────────────────────────────
@@ -567,54 +674,198 @@ void handle_serial() {
 
 // ── Leitura dos botões ────────────────────────────────────────────────────────
 
-void handle_buttons(unsigned long now) {
-    bool curr_cycle  = digitalRead(BTN_CYCLE);
-    bool curr_toggle = digitalRead(BTN_TOGGLE);
+// void handle_buttons(unsigned long now) {
+//     bool curr_cycle  = digitalRead(BTN_CYCLE);
+//     bool curr_toggle = digitalRead(BTN_TOGGLE);
 
-    // ── Modo leitura: BTN_CYCLE avança telas ─────────────────────────────────
-    if (game_mode == MODE_READING) {
-        if (prev_cycle == HIGH && curr_cycle == LOW) {
-            if (now - last_cycle_press > DEBOUNCE_MS) {
-                last_cycle_press = now;
-                reading_next();   // avança tela ou entra no jogo
+//     // ── Modo leitura: BTN_CYCLE avança telas ─────────────────────────────────
+//     if (game_mode == MODE_READING) {
+//         if (prev_cycle == HIGH && curr_cycle == LOW) {
+//             if (now - last_cycle_press > DEBOUNCE_MS) {
+//                 last_cycle_press = now;
+//                 reading_next();   // avança tela ou entra no jogo
+//             }
+//         }
+//         // BTN_TOGGLE ignorado no modo leitura
+//         prev_cycle  = curr_cycle;
+//         prev_toggle = curr_toggle;
+//         return;
+//     }
+
+//     // ── Modo jogo: comportamento original ────────────────────────────────────
+//     if (prev_cycle == HIGH && curr_cycle == LOW) {
+//         if (now - last_cycle_press > DEBOUNCE_MS) {
+//             last_cycle_press = now;
+//             cycle_selected_input();
+//             print_state();
+//         }
+//     }
+
+//     if (prev_toggle == HIGH && curr_toggle == LOW) {
+//         if (now - last_toggle_press > DEBOUNCE_MS) {
+//             last_toggle_press = now;
+//             toggle_input(selected_input);
+//             check_victory();
+//             print_state();
+//         }
+//     }
+
+//     prev_cycle  = curr_cycle;
+//     prev_toggle = curr_toggle;
+
+//     desenharFase1();
+// }
+
+void handle_joystick(unsigned long now) {
+    int x_val = readFilteredX();
+    int y_val = readFilteredY();
+    bool curr_sw = digitalRead(JOY_SW);
+
+    static unsigned long last_log = 0;
+
+
+    // ── 1. Interrupção por Polling no Chaveamento do Eixo Z (SW) ─────────
+    if (prev_sw == HIGH && curr_sw == LOW) {
+        if (now - last_sw_press > 100) { // Filtro elétrico contra repique 
+            last_sw_press = now;
+            
+            if (game_mode == MODE_PLAYING) {
+                toggle_input(selected_input);
+                check_victory();
+                print_state();
+            } else if (current_screen == 3) {
+                alterar_cor_joystick();
             }
         }
-        // BTN_TOGGLE ignorado no modo leitura
-        prev_cycle  = curr_cycle;
-        prev_toggle = curr_toggle;
-        return;
+    }
+    prev_sw = curr_sw;
+
+    // ── 2. Cálculo dos Limites Histeréticos (Eixos Contínuos) ───────────
+    bool x_in_deadzone = (x_val > joy_center_x - JOY_DEADZONE && x_val < joy_center_x + JOY_DEADZONE);
+    bool y_in_deadzone = (y_val > joy_center_y - JOY_DEADZONE && y_val < joy_center_y + JOY_DEADZONE);
+
+    // EIXO X: Só destrava a trava lógica se a mola repousar estática no centro por JOY_SETTLE_TIME
+    if (x_in_deadzone) {
+        if (now - x_center_time > JOY_SETTLE_TIME) {
+            axis_x_active = false; 
+        }
+    } else {
+        // Se a haste saiu do centro (seja pelo seu dedo ou pelo overshoot da mola), reseta o cronômetro
+        x_center_time = now; 
     }
 
-    // ── Modo jogo: comportamento original ────────────────────────────────────
-    if (prev_cycle == HIGH && curr_cycle == LOW) {
-        if (now - last_cycle_press > DEBOUNCE_MS) {
-            last_cycle_press = now;
-            cycle_selected_input();
-            print_state();
+    // EIXO Y: Mesma lógica de filtro passa-baixa mecânico
+    if (y_in_deadzone) {
+        if (now - y_center_time > JOY_SETTLE_TIME) {
+            axis_y_active = false;
+        }
+    } else {
+        y_center_time = now;
+    }
+
+    bool x_in_center = (abs(x_val - joy_center_x) <= JOY_CENTER_ZONE);
+    if (x_in_center) {
+        if (now - x_center_time > JOY_SETTLE_TIME) {
+            axis_x_active = false;
+        }
+    } else {
+        x_center_time = now;
+    }
+
+    if (millis() - last_log > 500) {
+        last_log = millis();
+        Serial.printf("X=%4d  Y=%4d  | deadX=%d  axisX=%d\n", x_val, y_val, x_in_deadzone, axis_x_active);
+    }
+
+// ── 3. ESTADO: MODO LEITURA (Varredura de Cenas via Eixo X) ─────────
+    if (game_mode == MODE_READING) {
+        if (!axis_x_active) {
+            if (x_val > joy_center_x + JOY_DEADZONE) {
+                reading_next();
+                axis_x_active = true;
+            } else if (x_val < joy_center_x - JOY_DEADZONE) {
+                reading_prev();
+                axis_x_active = true;
+            }
         }
     }
 
-    if (prev_toggle == HIGH && curr_toggle == LOW) {
-        if (now - last_toggle_press > DEBOUNCE_MS) {
-            last_toggle_press = now;
-            toggle_input(selected_input);
-            check_victory();
-            print_state();
+    if (game_mode == MODE_READING && !axis_x_active && (millis() - last_reading_action > 400)) {
+        if (x_val > joy_center_x + JOY_DEADZONE) {
+            reading_next();
+            axis_x_active = true;
+            last_reading_action = millis();
+        } else if (x_val < joy_center_x - JOY_DEADZONE) {
+            reading_prev();
+            axis_x_active = true;
+            last_reading_action = millis();
         }
     }
 
-    prev_cycle  = curr_cycle;
-    prev_toggle = curr_toggle;
+    // ── 4. ESTADO: MODO JOGO (Operação das Portas Lógicas) ──────────────
+    if (game_mode == MODE_PLAYING) {
+        
+        // Eixo Y (Cima / Baixo): Selecionar qual entrada será operada
+        if (!axis_y_active) {
+            if (y_val > joy_center_y + JOY_DEADZONE) {
+                cycle_selected_input(1);
+                print_state();
+                axis_y_active = true;
+            } else if (y_val < joy_center_y - JOY_DEADZONE) {
+                cycle_selected_input(-1);
+                print_state();
+                axis_y_active = true;
+            }
+        }
 
-    desenharFase1();
+        // Eixo X (Direita / Esquerda): Trocar de Fase
+        if (!axis_x_active) {
+            if (x_val > joy_center_x + JOY_DEADZONE) {
+                if (phase_won) {
+                    advance_phase();
+                } else {
+                    Serial.println("[AVISO] Resolva o circuito (S=1) para avancar!");
+                }
+                axis_x_active = true;
+            } else if (x_val < joy_center_x - JOY_DEADZONE) {
+                previous_phase();
+                axis_x_active = true;
+            }
+        }
+        
+        // desenharFase1();
+        // desenharFaseAtual();
+    }
 }
 
 // ── Setup e Loop ──────────────────────────────────────────────────────────────
 
+void calibrate_joystick() {
+    long sumX = 0, sumY = 0;
+    for (int i = 0; i < 200; i++) {
+        sumX += analogRead(JOY_VRX);
+        sumY += analogRead(JOY_VRY);
+        delay(5);
+    }
+    joy_center_x = sumX / 200;
+    joy_center_y = sumY / 200;
+    Serial.printf("Centro calibrado: X=%d Y=%d\n", joy_center_x, joy_center_y);
+}
+
+void atualizar_rgb() {
+    if (values[output_id]) rgb_verde();
+    else                   rgb_vermelho();
+}
+
 void setup() {
     Serial.begin(115200);
-    pinMode(BTN_CYCLE,  INPUT_PULLUP);
-    pinMode(BTN_TOGGLE, INPUT_PULLUP);
+    pinMode(JOY_SW, INPUT_PULLUP);
+    pinMode(RGB_R, OUTPUT);
+    pinMode(RGB_G, OUTPUT);
+    rgb_vermelho();
+
+    calibrate_joystick();
+    int joy_center_x = 2048, joy_center_y = 2048;
 
     load_phase(current_phase);
     propagate();
@@ -635,6 +886,34 @@ void setup() {
 
 void loop() {
     unsigned long now = millis();
-    handle_buttons(now);
+
+    handle_joystick(now);
     handle_serial();
+
+    if (game_mode == MODE_READING) {
+        if (now - last_rainbow_update >= RAINBOW_INTERVAL) {
+            last_rainbow_update = now;
+            updateRainbowColor();               // calcula nova cor
+            reading_show_current();             // redesenha a tela atual
+        }
+
+        // Movimenta a cobrinha na borda
+        advanceSnake();
+    }
+
+    // 3. Máquina de Estados: Modo Jogo (Atualização de Lógica/Timers)
+    if (game_mode == MODE_PLAYING) {
+        // Oscilador não-bloqueante para a entrada selecionada
+        if (now - last_blink_time >= BLINK_INTERVAL) {
+            last_blink_time = now;
+            blink_state = !blink_state; // Alterna o estado do bit (0/1)
+            display_dirty = true;       // Aciona o gatilho para atualizar a IHM
+        }
+    }
+
+    // ── Redesenha o circuito apenas quando necessário ──
+    if (game_mode == MODE_PLAYING && display_dirty) {
+        display_dirty = false;
+        desenharFaseAtual();
+    }
 }
