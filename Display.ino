@@ -23,6 +23,18 @@
 #define PANEL_HEIGHT 32   // altura em pixels
 #define PANELS_NUM    1   // número de painéis encadeados
 
+// ── Estado do Background (Matrix Rain) ───────────────────────────────────────
+#define MATRIX_COLUMNS (PANEL_WIDTH / 5) // Espaçamento entre colunas
+
+struct MatrixDrop {
+    int y;
+    int speed;
+};
+
+MatrixDrop matrix_drops[MATRIX_COLUMNS];
+unsigned long last_matrix_update = 0;
+bool matrix_initialized = false;
+
 // ── Pinos HUB75 (padrão mais comum para ESP32) ────────────────────────────────
 //
 // SE O PAINEL NÃO ACENDER: verifique a pinagem do seu adaptador/cabo.
@@ -94,6 +106,9 @@ MatrixPanel_I2S_DMA *display = nullptr;
 #define NUM_INPUTS 6
 
 // Forward declarations das funções de desenho
+void desenharFaseTutorialAND();
+void desenharFaseTutorialOR();
+void desenharFaseTutorialNOT();
 void desenharFase1();
 void desenharFase2();
 void desenharFase3();
@@ -108,6 +123,9 @@ void desenharFase10();
 
 typedef void (*FaseFn)();
 FaseFn fase_screens[] = {
+    desenharFaseTutorialAND,
+    desenharFaseTutorialOR,
+    desenharFaseTutorialNOT,
     desenharFase1,
     desenharFase2,
     desenharFase3,
@@ -129,7 +147,8 @@ ScreenFn reading_screens[] = {
     bem_vindo,
     instrucoes_eixo_x,
     instrucoes_eixo_y,
-    wrapper_instrucoes_sw
+    instrucoes_botao_sw,
+    instrucoes_cores
 };
 const int NUM_SCREENS = sizeof(reading_screens) / sizeof(reading_screens[0]);
 
@@ -323,6 +342,70 @@ void desenharNumeroFase(int fase) {
     display->print(fase);
 
     display->setFont(NULL);
+}
+
+void initMatrixBackground() {
+    for (int i = 0; i < MATRIX_COLUMNS; i++) {
+        matrix_drops[i].y = random(-40, 0);       // Distribuição espacial inicial off-screen
+        matrix_drops[i].speed = random(1, 4);     // Vetor velocidade variável para paralaxe
+    }
+    matrix_initialized = true;
+}
+
+void drawMatrixBackground() {
+    if (!matrix_initialized) initMatrixBackground();
+
+    unsigned long now = millis();
+    // Taxa de atualização (dt = 60ms ~ 16 FPS). Desacopla o FPS lógico do refresh do hardware.
+    if (now - last_matrix_update > 60) {
+        last_matrix_update = now;
+
+        display->setFont(&TomThumb);
+        display->setTextSize(1);
+        display->setTextWrap(false);
+
+        for (int i = 0; i < MATRIX_COLUMNS; i++) {
+            int x = i * 5 + 1; // +1 de margem lateral
+            int speed = matrix_drops[i].speed;
+
+            // 1. Limpeza da extremidade (tail-end clipping)
+            int tail_length = speed * 4 * 5; 
+            display->setTextColor(0x0000); 
+            display->setCursor(x, matrix_drops[i].y - tail_length);
+            
+            // Ocultação da cauda deve sobrescrever com bloco cheio ou ambos os dígitos
+            // Um caractere arbitrário como "1" ou "0" pintado de preto serve como máscara de apagamento
+            display->print("0"); 
+
+            // 2. Evolução temporal (Cinemática)
+            matrix_drops[i].y += speed;
+
+            // 3. Renderização Estocástica com Decaimento de Luminância
+            // random(2) avalia o LSB do gerador de entropia, retornando 0 ou 1.
+            
+            // Cabeça (Branco/Verde brilhante)
+            display->setTextColor(display->color565(150, 255, 150));
+            display->setCursor(x, matrix_drops[i].y);
+            display->print(random(2) ? "1" : "0");
+
+            // Segmento de corpo 1 (Verde médio)
+            display->setTextColor(display->color565(0, 180, 0));
+            display->setCursor(x, matrix_drops[i].y - (speed * 5));
+            display->print(random(2) ? "1" : "0");
+
+            // Segmento de corpo 2 (Verde escuro - opacidade caindo)
+            display->setTextColor(display->color565(0, 60, 0));
+            display->setCursor(x, matrix_drops[i].y - (speed * 10));
+            display->print(random(2) ? "1" : "0");
+
+            // 4. Condição de contorno (Reset periódico da partícula)
+            if (matrix_drops[i].y - tail_length > PANEL_HEIGHT) {
+                matrix_drops[i].y = random(-20, -5);
+                matrix_drops[i].speed = random(1, 4);
+            }
+        }
+        display->setFont(NULL); // Limpa o ponteiro de fonte para evitar efeitos colaterais
+    }
 }
 
 // ── Setup do painel ─────────────────────────────────────────────────────────────────────

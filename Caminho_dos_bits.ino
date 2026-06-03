@@ -1,3 +1,4 @@
+#include <Adafruit_NeoPixel.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_GrayOLED.h>
 #include <Adafruit_SPITFT.h>
@@ -45,7 +46,7 @@ extern void     alterar_cor_joystick();
 // Fase 10 tem 18 nós — MAX_N=20 dá margem para novas fases
 #define MAX_N      20
 #define MAX_INPUTS  6
-#define NUM_PHASES 10
+#define NUM_PHASES 13
 
 // Animação da borda
 #define PERIMETER       188      // número de pixels na borda externa (2*(64+32)-4)
@@ -54,6 +55,11 @@ extern void     alterar_cor_joystick();
 
 #define RGB_R 22
 #define RGB_G 2
+
+#define NUMERO_LEDS 6
+#define PIN_DATA_LEDS 18
+// Objeto de controle da fita de LEDs
+Adafruit_NeoPixel fita_LED(NUMERO_LEDS, PIN_DATA_LEDS);
 
 void rgb_verde()    { digitalWrite(RGB_R, LOW);  digitalWrite(RGB_G, HIGH); }
 void rgb_vermelho() { digitalWrite(RGB_R, HIGH); digitalWrite(RGB_G, LOW);  }
@@ -118,16 +124,19 @@ bool phase_won      = false; // true após S=1; BTN_CYCLE e 'n' avançam fase
 // ── Fórmulas para exibição ────────────────────────────────────────────────────
 
 const char* phase_formulas[NUM_PHASES] = {
-    "(A~E)+(~AE)",
-    "(A~B)+(BF)",
-    "(~AC)+(~A~E)",
-    "(AB)+((D+E)~F)",
-    "((~AB)(~C~D))(EF)",
-    "(((~AB)((C+D)~(CD)))E)~F",
-    "(~(~AB))(~CD)(~EF)",
-    "((AB)(~(CD)))(E+F)",
-    "(~A+(BC))(~A+(F(DE)))",
-    "(((A~B)C)+(~C(~AB)))+((DE)F)"
+    "A B (AND)",           // Fase 1 (Tutorial)
+    "A + B (OR)",          // Fase 2 (Tutorial)
+    "~A (NOT)",            // Fase 3 (Tutorial)
+    "(A~E)+(~AE)",         // Fase 4 (Antiga Fase 1)
+    "(A~B)+(BF)",          // Fase 5
+    "(~AC)+(~A~E)",        // Fase 6
+    "(AB)+((D+E)~F)",      // Fase 7
+    "((~AB)(~C~D))(EF)",   // Fase 8
+    "(((~AB)((C+D)~(CD)))E)~F", // Fase 9
+    "(~(~AB))(~CD)(~EF)",  // Fase 10
+    "((AB)(~(CD)))(E+F)",  // Fase 11
+    "(~A+(BC))(~A+(F(DE)))",// Fase 12
+    "(((A~B)C)+(~C(~AB)))+((DE)F)" // Fase 13
 };
 
 // ── Debounce ──────────────────────────────────────────────────────────────────
@@ -188,6 +197,63 @@ void edge(int from, int to) {
 }
 
 // ── Inicializadores de cada fase ──────────────────────────────────────────────
+
+// ── FASE TUTORIAL 1: Porta AND ────────────────────────────────────────────────
+// Topologia de rede lógica: 
+// [Nó 0: Entrada A] ──┐
+//                     ├─► [Nó 2: AND] ──► [Nó 3: Saída S]
+// [Nó 1: Entrada B] ──┘
+void init_fase_tutorial_and() {
+    num_nos = 4; 
+    num_inputs = 2; 
+    output_id = 3;
+    
+    input_ids[0] = 0; input_labels[0] = 'A';
+    input_ids[1] = 1; input_labels[1] = 'B';
+
+    kinds[2] = GATE_AND;
+    // O nó 3 (saída) assume implicitamente GATE_BUFFER por clear_circuit()
+    
+    edge(0, 2); // Roteamento: A -> AND
+    edge(1, 2); // Roteamento: B -> AND
+    edge(2, 3); // Roteamento: AND -> S
+}
+
+// ── FASE TUTORIAL 2: Porta OR ─────────────────────────────────────────────────
+// Topologia de rede lógica: 
+// [Nó 0: Entrada A] ──┐
+//                     ├─► [Nó 2: OR] ──► [Nó 3: Saída S]
+// [Nó 1: Entrada B] ──┘
+void init_fase_tutorial_or() {
+    num_nos = 4; 
+    num_inputs = 2; 
+    output_id = 3;
+    
+    input_ids[0] = 0; input_labels[0] = 'A';
+    input_ids[1] = 1; input_labels[1] = 'B';
+
+    kinds[2] = GATE_OR;
+    
+    edge(0, 2); // Roteamento: A -> OR
+    edge(1, 2); // Roteamento: B -> OR
+    edge(2, 3); // Roteamento: OR -> S
+}
+
+// ── FASE TUTORIAL 3: Porta NOT ────────────────────────────────────────────────
+// Topologia de rede lógica (Inversor): 
+// [Nó 0: Entrada A] ──► [Nó 1: NOT] ──► [Nó 2: Saída S]
+void init_fase_tutorial_not() {
+    num_nos = 3; 
+    num_inputs = 1; 
+    output_id = 2;
+    
+    input_ids[0] = 0; input_labels[0] = 'A';
+
+    kinds[1] = GATE_NOT;
+    
+    edge(0, 1); // Roteamento: A -> NOT
+    edge(1, 2); // Roteamento: NOT -> S
+}
 
 // FASE 01: (A~E)+(~AE)  →  XOR(A,E)
 // Nós: 0=A  1=E  2=NOT_A  3=NOT_E  4=AND(A,NE)  5=AND(NA,E)  6=OR  7=S
@@ -453,18 +519,22 @@ void init_fase_10() {
 void load_phase(int phase) {
     clear_circuit();
     switch (phase) {
-        case 1:  init_fase_1();  break;
-        case 2:  init_fase_2();  break;
-        case 3:  init_fase_3();  break;
-        case 4:  init_fase_4();  break;
-        case 5:  init_fase_5();  break;
-        case 6:  init_fase_6();  break;
-        case 7:  init_fase_7();  break;
-        case 8:  init_fase_8();  break;
-        case 9:  init_fase_9();  break;
-        case 10: init_fase_10(); break;
+        case 1:  init_fase_tutorial_and();  break;
+        case 2:  init_fase_tutorial_or();  break;
+        case 3:  init_fase_tutorial_not();  break;
+        case 4:  init_fase_1();  break;
+        case 5:  init_fase_2();  break;
+        case 6:  init_fase_3();  break;
+        case 7:  init_fase_4();  break;
+        case 8:  init_fase_5();  break;
+        case 9:  init_fase_6();  break;
+        case 10:  init_fase_7();  break;
+        case 11:  init_fase_8();  break;
+        case 12:  init_fase_9();  break;
+        case 13: init_fase_10(); break;
     }
     atualizar_rgb();
+    atualizar_fita_led();
 }
 
 // ── Lógica do circuito ────────────────────────────────────────────────────────
@@ -511,6 +581,7 @@ void toggle_input(int input_index) {
     values[node_id] = !values[node_id];
     propagate();
     atualizar_rgb();
+    atualizar_fita_led();
     display_dirty = true;
 }
 
@@ -565,6 +636,7 @@ void previous_phase() {
 
 void cycle_selected_input(int direction) {
     selected_input = (selected_input + direction + num_inputs) % num_inputs;
+    atualizar_fita_led();
     display_dirty = true;
 }
 
@@ -733,7 +805,7 @@ void handle_joystick(unsigned long now) {
                 toggle_input(selected_input);
                 check_victory();
                 print_state();
-            } else if (current_screen == 3) {
+            } else if (current_screen == 3 || current_screen == 4) {
                 alterar_cor_joystick();
             }
         }
@@ -857,12 +929,38 @@ void atualizar_rgb() {
     else                   rgb_vermelho();
 }
 
+// Sincroniza a fita de LEDs com o estado lógico e a interface do usuário
+void atualizar_fita_led() {
+    fita_LED.clear(); // Apaga o buffer anterior
+    
+    // Iteramos apenas até o número de entradas ativas na fase atual
+    for (int i = 0; i < num_inputs; i++) {
+        if (i == selected_input) {
+            // A entrada sob o cursor acende em branco (R:255, G:255, B:255)
+            fita_LED.setPixelColor(i, fita_LED.Color(255, 255, 255));
+        } else {
+            // As outras entradas mostram o estado lógico atual da planta
+            // 0 = Vermelho tênue, 1 = Verde tênue
+            int node_id = input_ids[i];
+            if (values[node_id]) {
+                fita_LED.setPixelColor(i, fita_LED.Color(0, 30, 0)); // Estado HIGH
+            } else {
+                fita_LED.setPixelColor(i, fita_LED.Color(30, 0, 0)); // Estado LOW
+            }
+        }
+    }
+    fita_LED.show(); // Dispara o sinal via periférico RMT do ESP32
+}
+
 void setup() {
     Serial.begin(115200);
     pinMode(JOY_SW, INPUT_PULLUP);
     pinMode(RGB_R, OUTPUT);
     pinMode(RGB_G, OUTPUT);
     rgb_vermelho();
+
+    fita_LED.begin();
+    fita_LED.show();
 
     calibrate_joystick();
     int joy_center_x = 2048, joy_center_y = 2048;
@@ -898,7 +996,7 @@ void loop() {
         }
 
         // Movimenta a cobrinha na borda
-        advanceSnake();
+        // advanceSnake();
     }
 
     // 3. Máquina de Estados: Modo Jogo (Atualização de Lógica/Timers)
@@ -916,4 +1014,5 @@ void loop() {
         display_dirty = false;
         desenharFaseAtual();
     }
+
 }
