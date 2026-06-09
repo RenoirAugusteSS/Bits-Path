@@ -6,6 +6,7 @@
 #include <gfxfont.h>
 #include "game_types.h"
 #include <Fonts/TomThumb.h>
+#include "mp3_config.h"
 
 // ── Variáveis externas declaradas em Display.ino ──────────────────────────────
 extern GameMode game_mode;
@@ -68,6 +69,41 @@ typedef enum {
     GATE_NOT     // f = !predecessor
 } GateKind;
 
+// Enum semântico para as faixas — evita números mágicos espalhados
+enum class GameTrack : uint8_t {
+  MENU         = 1,
+  TUTORIAL_AND = 2,
+  TUTORIAL_OR  = 3,
+  TUTORIAL_NOT = 4,
+  GAMEPLAY     = 5,
+};
+
+// Estado de áudio — controle de loop sem blocking
+static GameTrack current_track   = GameTrack::MENU;
+static bool      audio_looping   = false;
+static unsigned long last_audio_check = 0;
+#define AUDIO_POLL_MS 500  // intervalo de polling para reloop (ms)
+
+void playGameMusic(GameTrack track, bool loop = false) {
+  current_track  = track;
+  audio_looping  = loop;
+  dfplayer_play(static_cast<uint8_t>(track));
+}
+
+void onGameStart() {
+  playGameMusic(GameTrack::GAMEPLAY);
+}
+
+// void onGameOver() {
+//   dfplayer_setVolume(20);
+//   playGameMusic(GameTrack::GAMEOVER);
+// }
+
+bool dfplayer_is_playing() {
+  // readState() retorna 1 se estiver tocando, 0 se parado/pausado
+  return player.readState() == 1;
+}
+
 // ── Estado global do circuito ─────────────────────────────────────────────────
 
 // Matriz de adjacência MAX_N×MAX_N — topologia do circuito atual
@@ -91,6 +127,7 @@ bool axis_x_active = false;
 bool axis_y_active = false;
 unsigned long last_joy_action = 0;
 static unsigned long last_reading_action = 0;
+static GameMode prev_game_mode = MODE_READING;
 
 bool display_dirty = true;  // true = precisa redesenhar
 
@@ -468,20 +505,33 @@ void load_phase(int phase) {
     exibir_resultado = false;
 
     switch (phase) {
-        case 1:  init_fase_tutorial_and();  break;
-        case 2:  init_fase_tutorial_or();  break;
-        case 3:  init_fase_tutorial_not();  break;
-        case 4:  init_fase_1();  break;
+        case 1:
+            init_fase_tutorial_and();
+            playGameMusic(GameTrack::TUTORIAL_AND, false);         // MENU em loop até fase 1 iniciar
+            break;
+        case 2:
+            init_fase_tutorial_or();
+            playGameMusic(GameTrack::TUTORIAL_OR, false); // toca uma vez
+            break;
+        case 3:
+            init_fase_tutorial_not();
+            playGameMusic(GameTrack::TUTORIAL_NOT, false);
+            break;
+        case 4:
+            init_fase_1();
+            playGameMusic(GameTrack::GAMEPLAY, true);     // GAMEPLAY em loop a partir daqui
+            break;
         case 5:  init_fase_2();  break;
         case 6:  init_fase_3();  break;
         case 7:  init_fase_4();  break;
         case 8:  init_fase_5();  break;
         case 9:  init_fase_6();  break;
-        case 10:  init_fase_7();  break;
-        case 11:  init_fase_8();  break;
-        case 12:  init_fase_9();  break;
+        case 10: init_fase_7();  break;
+        case 11: init_fase_8();  break;
+        case 12: init_fase_9();  break;
         case 13: init_fase_10(); break;
     }
+
     atualizar_rgb();
     atualizar_fita_led();
 }
@@ -742,21 +792,37 @@ void setup() {
 
     calibrate_joystick();
 
-    load_phase(current_phase);
+    dfplayer_init();            // ← DEVE vir antes de qualquer playGameMusic()
+
+    playGameMusic(GameTrack::MENU, true);  // ← MENU em loop imediato no boot
+
+    load_phase(current_phase);  // ← load_phase(1) NÃO deve tocar música agora
     propagate();
 
     inicializar_display();
-
-    iniciarCoresFase();      // inicializa COR_ATIVO/INATIVO/FUNDO
-
-    // Exibe a primeira tela de leitura
+    iniciarCoresFase();
     reading_show_current();
 }
 
 void loop() {
     unsigned long now = millis();
 
+    if (prev_game_mode == MODE_READING && game_mode == MODE_PLAYING) {
+        if (current_phase == 1) {
+            playGameMusic(GameTrack::TUTORIAL_AND, false);
+        }
+    }
+    prev_game_mode = game_mode;
+
     handle_joystick(now);
+
+    // ── Polling de reloop de áudio (substitui EQ/busy pin) ───────────────
+    if (audio_looping && (now - last_audio_check >= AUDIO_POLL_MS)) {
+        last_audio_check = now;
+        if (!dfplayer_is_playing()) {
+            dfplayer_play(static_cast<uint8_t>(current_track));
+        }
+    }
 
     if (game_mode == MODE_READING) {
         if (now - last_rainbow_update >= RAINBOW_INTERVAL) {
